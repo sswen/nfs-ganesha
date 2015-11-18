@@ -108,11 +108,13 @@ int gpfs_ganesha(int op, void *oarg);
 #define OPENHANDLE_KEY_LEN 28
 #define OPENHANDLE_VERSION 1
 
-/* gpfs_max_fh_size will be OPENHANDLE_SHORT_HANDLE_LEN if
+/* GPFS_MAX_FH_SIZE will be OPENHANDLE_SHORT_HANDLE_LEN if
  * short_file_handle is enabled. Otherwise, it is set to
  * OPENHANDLE_HANDLE_LEN.
  */
-extern int gpfs_max_fh_size;
+#define GPFS_MAX_FH_SIZE ((nfs_param.core_param.short_file_handle) ? \
+				(OPENHANDLE_SHORT_HANDLE_LEN) :      \
+				(OPENHANDLE_HANDLE_LEN))
 
 struct xstat_cred_t
 {
