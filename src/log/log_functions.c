@@ -687,10 +687,8 @@ static struct log_facility *find_log_facility(const char *name)
  * @return 0 on success, -errno for failure
  */
 
-int create_log_facility(char *name,
-			lf_function_t *log_func,
-			log_levels_t max_level,
-			log_header_t header,
+int create_log_facility(const char *name, lf_function_t *log_func,
+			log_levels_t max_level, log_header_t header,
 			void *private)
 {
 	struct log_facility *facility;
@@ -780,7 +778,7 @@ int create_log_facility(char *name,
  * @returns always.  The logger is not disabled or released on errors
  */
 
-void release_log_facility(char *name)
+void release_log_facility(const char *name)
 {
 	struct log_facility *facility;
 
@@ -822,7 +820,7 @@ void release_log_facility(char *name)
  * @return 0 on success, -errno on errors.
  */
 
-int enable_log_facility(char *name)
+int enable_log_facility(const char *name)
 {
 	struct log_facility *facility;
 
@@ -857,7 +855,7 @@ int enable_log_facility(char *name)
  * @return 0 on success, -errno on errors.
  */
 
-int disable_log_facility(char *name)
+int disable_log_facility(const char *name)
 {
 	struct log_facility *facility;
 
@@ -965,7 +963,7 @@ out:
  * @return 0 on success, -errno on errors
  */
 
-int set_log_destination(char *name, char *dest)
+int set_log_destination(const char *name, char *dest)
 {
 	struct log_facility *facility;
 	int rc;
@@ -1049,7 +1047,7 @@ int set_log_destination(char *name, char *dest)
  * @return 0 on success, -errno on errors
  */
 
-int set_log_level(char *name, log_levels_t max_level)
+int set_log_level(const char *name, log_levels_t max_level)
 {
 	struct log_facility *facility;
 
