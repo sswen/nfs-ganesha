@@ -1,4 +1,7 @@
-/*-------------------------------------------------------------------------
+/**------------------------------------------------------------------------
+ * @file gpfsext.c
+ * @brief Use ioctl to call into the GPFS kernel module.
+ *
  * NAME:        gpfs_ganesha()
  *
  * FUNCTION:    Use ioctl to call into the GPFS kernel module.
@@ -12,8 +15,6 @@
  *              EINVAL  Not a GPFS file
  *              ESTALE  cached fs information was invalid
  *-------------------------------------------------------------------------*/
-
-#include "config.h"
 
 #include <sys/errno.h>
 #include <sys/fcntl.h>
@@ -36,6 +37,10 @@ struct kxArgs {
 };
 
 #ifdef _VALGRIND_MEMCHECK
+
+/** @fn static void valgrind_kganesha(struct kxArgs *args)
+ *  @param args Valgrind arguments
+ */
 static void valgrind_kganesha(struct kxArgs *args)
 {
 	int op = (int)args->arg1;
@@ -129,6 +134,12 @@ static void valgrind_kganesha(struct kxArgs *args)
 }
 #endif
 
+/** @fn int gpfs_ganesha(int op, void *oarg)
+ *  @param op Operation
+ *  @param *oarg Arguments
+ *
+ *  @return Result
+*/
 int gpfs_ganesha(int op, void *oarg)
 {
 	int rc;
