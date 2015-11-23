@@ -1,4 +1,7 @@
-/*
+/**
+ * @file    fsal_up.c
+ * @brief   FSAL Upcall Interface
+ *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
  * as published by the Free Software Foundation; either version 3 of
@@ -17,12 +20,6 @@
  * ---------------------------------------
  */
 
-/**
- * @file    fsal_up.c
- * @brief   FSAL Upcall Interface
- */
-#include "config.h"
-
 #include "fsal.h"
 #include "fsal_up.h"
 #include "fsal_internal.h"
@@ -33,45 +30,34 @@
 #include <utime.h>
 #include <sys/time.h>
 
-void *GPFSFSAL_UP_Thread(void *Arg)
+void *GPFSFSAL_UP_Thread(void *arg)
 {
-	struct gpfs_filesystem *gpfs_fs = Arg;
-	const struct fsal_up_vector *event_func;
-	char thr_name[16];
-	int rc = 0;
-	struct pnfs_deviceid devid;
-	struct stat buf;
-	struct glock fl;
-	struct callback_arg callback;
-	struct gpfs_file_handle handle;
+	struct gpfs_filesystem *gpfs_fs = arg;
+	const struct fsal_up_vector *event_func = gpfs_fs->up_ops;
+	char thr_name[16] = {0};
+	struct pnfs_deviceid devid = {0};
+	struct stat buf = {0};
+	struct glock fl = {0};
+	struct callback_arg callback = {0};
+	struct gpfs_file_handle handle = {0};
 	int reason = 0;
 	int flags = 0;
-	unsigned int *fhP;
+	unsigned int *fhP = NULL;
 	int retry = 0;
-	struct gsh_buffdesc key;
+	struct gsh_buffdesc key = {0};
 	uint32_t expire_time_attr = 0;
 	uint32_t upflags = 0;
 	int errsv = 0;
+	int rc = 0;
 
-#ifdef _VALGRIND_MEMCHECK
-		memset(&handle, 0, sizeof(handle));
-		memset(&buf, 0, sizeof(buf));
-		memset(&fl, 0, sizeof(fl));
-		memset(&devid, 0, sizeof(devid));
-#endif
-
-	snprintf(thr_name, sizeof(thr_name),
-		 "fsal_up_%"PRIu64".%"PRIu64,
+	snprintf(thr_name, sizeof(thr_name), "fsal_up_%"PRIu64".%"PRIu64,
 		 gpfs_fs->fs->dev.major, gpfs_fs->fs->dev.minor);
 	SetNameFunction(thr_name);
-
-	/* Set the FSAL UP functions that will be used to process events. */
-	event_func = gpfs_fs->up_ops;
 
 	if (event_func == NULL) {
 		LogFatal(COMPONENT_FSAL_UP,
 			 "FSAL up vector does not exist. Can not continue.");
-		gsh_free(Arg);
+		gsh_free(arg);
 		return NULL;
 	}
 
@@ -80,7 +66,7 @@ void *GPFSFSAL_UP_Thread(void *Arg)
 		     gpfs_fs->root_fd);
 
 	/* Start querying for events and processing. */
-	while (1) {
+	while (true) {
 		LogFullDebug(COMPONENT_FSAL_UP,
 			     "Requesting event from FSAL Callback interface for %d.",
 			     gpfs_fs->root_fd);
@@ -89,8 +75,8 @@ void *GPFSFSAL_UP_Thread(void *Arg)
 		handle.handle_key_size = OPENHANDLE_KEY_LEN;
 		handle.handle_version = OPENHANDLE_VERSION;
 
-		callback.interface_version =
-		    GPFS_INTERFACE_VERSION + GPFS_INTERFACE_SUB_VER;
+		callback.interface_version = GPFS_INTERFACE_VERSION +
+						GPFS_INTERFACE_SUB_VER;
 
 		callback.mountdirfd = gpfs_fs->root_fd;
 		callback.handle = &handle;
@@ -131,7 +117,6 @@ void *GPFSFSAL_UP_Thread(void *Arg)
 				LogFatal(COMPONENT_FSAL_UP,
 					 "GPFS file system %d has gone away.",
 					 gpfs_fs->root_fd);
-
 			continue;
 		}
 
@@ -154,7 +139,7 @@ void *GPFSFSAL_UP_Thread(void *Arg)
 
 		callback.handle->handle_version = OPENHANDLE_VERSION;
 
-		fhP = (int *)&(callback.handle->f_handle[0]);
+		fhP = (int *)callback.handle->f_handle;
 		LogFullDebug(COMPONENT_FSAL_UP,
 			     " inode update: handle %08x %08x %08x %08x %08x %08x %08x",
 			     fhP[0], fhP[1], fhP[2], fhP[3], fhP[4], fhP[5],
@@ -174,11 +159,11 @@ void *GPFSFSAL_UP_Thread(void *Arg)
 			{
 				LogMidDebug(COMPONENT_FSAL_UP,
 					    "%s: owner %p pid %d type %d start %lld len %lld",
-					    reason ==
-					    INODE_LOCK_GRANTED ?
-					    "inode lock granted" :
-					    "inode lock again", fl.lock_owner,
-					    fl.flock.l_pid, fl.flock.l_type,
+					    reason == INODE_LOCK_GRANTED ?
+						"inode lock granted" :
+						"inode lock again",
+					    fl.lock_owner, fl.flock.l_pid,
+					    fl.flock.l_type,
 					    (long long)fl.flock.l_start,
 					    (long long)fl.flock.l_len);
 
@@ -192,15 +177,13 @@ void *GPFSFSAL_UP_Thread(void *Arg)
 					rc = up_async_lock_avail(general_fridge,
 							 event_func,
 							 gpfs_fs->fs->fsal,
-							 &key,
-							 fl.lock_owner,
+							 &key, fl.lock_owner,
 							 &lockdesc, NULL, NULL);
 				else
 					rc = up_async_lock_grant(general_fridge,
 							 event_func,
 							 gpfs_fs->fs->fsal,
-							 &key,
-							 fl.lock_owner,
+							 &key, fl.lock_owner,
 							 &lockdesc, NULL, NULL);
 			}
 			break;
@@ -210,8 +193,8 @@ void *GPFSFSAL_UP_Thread(void *Arg)
 				 "delegation recall: flags:%x ino %ld", flags,
 				 callback.buf->st_ino);
 			rc = up_async_delegrecall(general_fridge, event_func,
-						  gpfs_fs->fs->fsal,
-						  &key, NULL, NULL);
+						  gpfs_fs->fs->fsal, &key, NULL,
+						  NULL);
 			break;
 
 		case LAYOUT_FILE_RECALL:	/* Layout file recall Event */
@@ -227,12 +210,10 @@ void *GPFSFSAL_UP_Thread(void *Arg)
 
 				rc = up_async_layoutrecall(general_fridge,
 							event_func,
-							gpfs_fs->fs->fsal,
-							&key,
+							gpfs_fs->fs->fsal, &key,
 							LAYOUT4_NFSV4_1_FILES,
 							false, &segment,
-							NULL, NULL, NULL,
-							NULL);
+							NULL, NULL, NULL, NULL);
 			}
 			break;
 
@@ -260,13 +241,10 @@ void *GPFSFSAL_UP_Thread(void *Arg)
 			memset(&devid, 0, sizeof(devid));
 			devid.fsal_id = FSAL_ID_GPFS;
 
-			rc = up_async_notify_device(general_fridge,
-						event_func,
+			rc = up_async_notify_device(general_fridge, event_func,
 						NOTIFY_DEVICEID4_DELETE_MASK,
-						LAYOUT4_NFSV4_1_FILES,
-						&devid,
-						true, NULL,
-						NULL);
+						LAYOUT4_NFSV4_1_FILES, &devid,
+						true, NULL, NULL);
 			break;
 
 		case INODE_UPDATE:	/* Update Event */
