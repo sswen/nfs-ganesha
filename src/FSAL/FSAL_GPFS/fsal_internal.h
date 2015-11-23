@@ -189,6 +189,11 @@ fsal_status_t fsal_trucate_by_handle(int dirfd,
 				     struct gpfs_file_handle *p_handle,
 				     u_int64_t size);
 
+fsal_status_t fsal_acl_2_gpfs_acl(struct fsal_obj_handle *dir_hdl,
+				  fsal_acl_t *p_fsalacl,
+				  gpfsfsal_xstat_t *p_buffxstat);
+
+
 /* All the call to FSAL to be wrapped */
 
 fsal_status_t GPFSFSAL_getattrs(struct fsal_export *export,
