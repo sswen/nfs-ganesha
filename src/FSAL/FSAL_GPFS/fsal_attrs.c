@@ -58,36 +58,31 @@ GPFSFSAL_fs_loc(struct fsal_export *export, struct gpfs_filesystem *gpfs_fs,
 		struct gpfs_file_handle *gpfs_fh, struct attrlist *obj_attr,
 		struct fs_locations4 *fs_locs)
 {
-	int errsv, rc;
-	struct fs_loc_arg fs_loc;
+	struct fs_loc_arg fs_loc = {0};
+	struct fs_location4 *loc_val = fs_locs->locations.locations_val;
+	int rc;
 
 	fs_loc.fs_path_len = fs_locs->fs_root.pathname4_val->utf8string_len;
 	fs_loc.fs_path = fs_locs->fs_root.pathname4_val->utf8string_val;
-	fs_loc.fs_server_len = fs_locs->locations.locations_val->
-					server.server_val->utf8string_len;
-	fs_loc.fs_server = fs_locs->locations.locations_val->
-					server.server_val->utf8string_val;
-	fs_loc.fs_root_len = fs_locs->locations.locations_val->
-					rootpath.pathname4_val->utf8string_len;
-	fs_loc.fs_root = fs_locs->locations.locations_val->
-					rootpath.pathname4_val->utf8string_val;
+	fs_loc.fs_server_len = loc_val->server.server_val->utf8string_len;
+	fs_loc.fs_server = loc_val->server.server_val->utf8string_val;
+	fs_loc.fs_root_len = loc_val->rootpath.pathname4_val->utf8string_len;
+	fs_loc.fs_root = loc_val->rootpath.pathname4_val->utf8string_val;
 	fs_loc.mountdirfd = gpfs_fs->root_fd;
 	fs_loc.handle = gpfs_fh;
 
 	rc = gpfs_ganesha(OPENHANDLE_FS_LOCATIONS, &fs_loc);
-	errsv = errno;
-	LogDebug(COMPONENT_FSAL,
-		 "gpfs_ganesha: FS_LOCATIONS returned, rc %d errsv %d",
-		 rc, errsv);
 
-	if (rc)
+	if (rc) {
+		LogDebug(COMPONENT_FSAL,
+			 "gpfs_ganesha: FS_LOCATIONS returned, rc %d errno %d",
+			 rc, errno);
 		return fsalstat(ERR_FSAL_ATTRNOTSUPP, 0);
+	}
 
 	fs_locs->fs_root.pathname4_val->utf8string_len = fs_loc.fs_path_len;
-	fs_locs->locations.locations_val->server.server_val->utf8string_len =
-					fs_loc.fs_server_len;
-	fs_locs->locations.locations_val->rootpath.pathname4_val->
-					utf8string_len = fs_loc.fs_root_len;
+	loc_val->server.server_val->utf8string_len = fs_loc.fs_server_len;
+	loc_val->rootpath.pathname4_val->utf8string_len = fs_loc.fs_root_len;
 
 	LogDebug(COMPONENT_FSAL,
 		 "gpfs_ganesha: FS_LOCATIONS root=%s path=%s server=%s",
@@ -111,28 +106,22 @@ GPFSFSAL_getattrs(struct fsal_export *export, struct gpfs_filesystem *gpfs_fs,
 		  const struct req_op_context *op_ctx,
 		  struct gpfs_file_handle *gpfs_fh, struct attrlist *obj_attr)
 {
-	fsal_status_t st;
-	gpfsfsal_xstat_t buffxstat;
-	bool expire;
-	uint32_t expire_time_attr = 0;	/*< Expiration time for attributes. */
-	struct gpfs_fsal_export *gpfs_export;
+	struct gpfs_fsal_export *gpfs_export =
+		container_of(export, struct gpfs_fsal_export, export);
+	gpfsfsal_xstat_t buffxstat = {0};
+	uint32_t exp_tattr = 0;
+	bool expire = op_ctx->export->expire_time_attr > 0;
+	fsal_status_t status = fsal_get_xstat_by_handle(gpfs_fs->root_fd,
+							gpfs_fh, &buffxstat,
+							&exp_tattr, expire,
+							gpfs_export->use_acl);
 
-	/* Initialize fsal_fsid to 0.0 in case older GPFS */
-	buffxstat.fsal_fsid.major = 0;
-	buffxstat.fsal_fsid.minor = 0;
-
-	expire = op_ctx->export->expire_time_attr > 0;
-	gpfs_export = container_of(export, struct gpfs_fsal_export, export);
-
-	st = fsal_get_xstat_by_handle(gpfs_fs->root_fd, gpfs_fh,
-				      &buffxstat, &expire_time_attr, expire,
-				      gpfs_export->use_acl);
-	if (FSAL_IS_ERROR(st))
-		return st;
+	if (FSAL_IS_ERROR(status))
+		return status;
 
 	/* convert attributes */
-	if (expire_time_attr != 0)
-		obj_attr->expire_time_attr = expire_time_attr;
+	if (exp_tattr != 0)
+		obj_attr->expire_time_attr = exp_tattr;
 
 	/* Assume if fsid = 0.0, then old GPFS didn't fill it in, in that
 	 * case, fill in from the object's filesystem.
@@ -140,15 +129,14 @@ GPFSFSAL_getattrs(struct fsal_export *export, struct gpfs_filesystem *gpfs_fs,
 	if (buffxstat.fsal_fsid.major == 0 && buffxstat.fsal_fsid.minor == 0)
 		buffxstat.fsal_fsid = gpfs_fs->fs->fsid;
 
-	st = gpfsfsal_xstat_2_fsal_attributes(&buffxstat, obj_attr,
-					      gpfs_export->use_acl);
-	if (FSAL_IS_ERROR(st)) {
+	status = gpfsfsal_xstat_2_fsal_attributes(&buffxstat, obj_attr,
+						  gpfs_export->use_acl);
+	if (FSAL_IS_ERROR(status)) {
 		FSAL_CLEAR_MASK(obj_attr->mask);
 		FSAL_SET_MASK(obj_attr->mask, ATTR_RDATTR_ERR);
-		return st;
 	}
 
-	return fsalstat(ERR_FSAL_NO_ERROR, 0);
+	return status;
 }
 
 /**
@@ -164,30 +152,28 @@ fsal_status_t
 GPFSFSAL_statfs(int mountdirfd, struct fsal_obj_handle *obj_hdl,
 		struct statfs *buf)
 {
-	int rc;
-	struct statfs_arg sarg;
-	struct gpfs_fsal_obj_handle *myself;
+	struct gpfs_fsal_obj_handle *myself =
+		container_of(obj_hdl, struct gpfs_fsal_obj_handle, obj_handle);
+	struct statfs_arg sarg = {0};
+	const fsal_status_t status = {ERR_FSAL_NO_ERROR, 0};
 	int errsv;
-
-	myself = container_of(obj_hdl, struct gpfs_fsal_obj_handle, obj_handle);
+	int rc;
 
 	sarg.handle = myself->handle;
 	sarg.mountdirfd = mountdirfd;
 	sarg.buf = buf;
 
 	rc = gpfs_ganesha(OPENHANDLE_STATFS_BY_FH, &sarg);
-	errsv = errno;
-
-	LogFullDebug(COMPONENT_FSAL,
-		     "OPENHANDLE_STATFS_BY_FH returned: rc %d", rc);
-
 	if (rc < 0) {
+		errsv = errno;
+		LogFullDebug(COMPONENT_FSAL,
+			     "OPENHANDLE_STATFS_BY_FH returned: rc %d", rc);
 		if (errsv == EUNATCH)
 			LogFatal(COMPONENT_FSAL, "GPFS Returned EUNATCH");
 		return fsalstat(posix2fsal_error(errsv), errsv);
 	}
 
-	return fsalstat(ERR_FSAL_NO_ERROR, 0);
+	return status;
 }
 
 /**
@@ -208,40 +194,34 @@ GPFSFSAL_setattrs(struct fsal_obj_handle *dir_hdl,
 		  const struct req_op_context *ro_ctx,
 		  struct attrlist *obj_attr)
 {
-	fsal_status_t status;
 	struct gpfs_fsal_obj_handle *myself;
-	gpfsfsal_xstat_t buffxstat;
 	struct gpfs_filesystem *gpfs_fs;
 	struct gpfs_fsal_export *gpfs_export;
+	gpfsfsal_xstat_t buffxstat = {0};
+	fsal_status_t status = {ERR_FSAL_NO_ERROR, 0};
+	int attr_valid = 0;  /* should stat or acl or both be changed. */
+	int attr_changed = 0; /* which attribute in stat should be changed. */
 	bool use_acl;
 
-	/* Indicate if stat or acl or both should be changed. */
-	int attr_valid = 0;
-
-	/* Indicate which attribute in stat should be changed. */
-	int attr_changed = 0;
-
-	/* sanity checks.
-	 * note : object_attributes is optional.
-	 */
+	/* note : obj_attr is optional. */
 	if (!dir_hdl || !ro_ctx || !obj_attr)
 		return fsalstat(ERR_FSAL_FAULT, 0);
 
 	myself = container_of(dir_hdl, struct gpfs_fsal_obj_handle, obj_handle);
+
 	gpfs_fs = dir_hdl->fs->private;
-	gpfs_export = container_of(ro_ctx->fsal_export,
-				   struct gpfs_fsal_export, export);
+	gpfs_export = container_of(ro_ctx->fsal_export, struct gpfs_fsal_export,
+				   export);
+
 	use_acl = gpfs_export->use_acl;
 
 	/* First, check that FSAL attributes changes are allowed. */
-
 	/* Is it allowed to change times ? */
-
 	if (!ro_ctx->fsal_export->exp_ops.fs_supports(ro_ctx->fsal_export,
 						      fso_cansettime)) {
 		if (obj_attr->mask &
-			(ATTR_ATIME | ATTR_CREATION | ATTR_CTIME | ATTR_MTIME
-			    | ATTR_MTIME_SERVER | ATTR_ATIME_SERVER)) {
+			(ATTR_ATIME | ATTR_CREATION | ATTR_CTIME | ATTR_MTIME |
+			 ATTR_MTIME_SERVER | ATTR_ATIME_SERVER)) {
 			/* handled as an unsettable attribute. */
 			return fsalstat(ERR_FSAL_INVAL, 0);
 		}
@@ -256,7 +236,6 @@ GPFSFSAL_setattrs(struct fsal_obj_handle *dir_hdl,
   /**************
    *  TRUNCATE  *
    **************/
-
 	if (FSAL_TEST_MASK(obj_attr->mask, ATTR_SIZE)) {
 		attr_changed |= XATTR_SIZE;
 		/* Fill wanted mode. */
@@ -268,8 +247,7 @@ GPFSFSAL_setattrs(struct fsal_obj_handle *dir_hdl,
 
   /*******************
    *  SPACE RESERVED *
-   ************)******/
-
+   *******************/
 	if (FSAL_TEST_MASK(obj_attr->mask, ATTR4_SPACE_RESERVED)) {
 		attr_changed |= XATTR_SPACE_RESERVED;
 		/* Fill wanted mode. */
@@ -282,30 +260,23 @@ GPFSFSAL_setattrs(struct fsal_obj_handle *dir_hdl,
   /***********
    *  CHMOD  *
    ***********/
-	if (FSAL_TEST_MASK(obj_attr->mask, ATTR_MODE)) {
-
+	if (FSAL_TEST_MASK(obj_attr->mask, ATTR_MODE) &&
+	    (dir_hdl->type != SYMBOLIC_LINK)) {
 		/* The POSIX chmod call don't affect the symlink object, but
 		 * the entry it points to. So we must ignore it.
 		 */
-		if (dir_hdl->type != SYMBOLIC_LINK) {
-			attr_changed |= XATTR_MODE;
-
-			/* Fill wanted mode. */
-			buffxstat.buffstat.st_mode =
-			    fsal2unix_mode(obj_attr->mode);
-			LogDebug(COMPONENT_FSAL,
-				 "current mode = %o, new mode = %o",
-				 fsal2unix_mode(myself->attributes.mode),
-				 buffxstat.buffstat.st_mode);
-
-		}
-
+		attr_changed |= XATTR_MODE;
+		/* Fill wanted mode. */
+		buffxstat.buffstat.st_mode = fsal2unix_mode(obj_attr->mode);
+		LogDebug(COMPONENT_FSAL,
+			 "current mode = %o, new mode = %o",
+			 fsal2unix_mode(myself->attributes.mode),
+			 buffxstat.buffstat.st_mode);
 	}
 
   /***********
    *  CHOWN  *
    ***********/
-
 	/* Fill wanted owner. */
 	if (FSAL_TEST_MASK(obj_attr->mask, ATTR_OWNER)) {
 		attr_changed |= XATTR_UID;
@@ -327,7 +298,6 @@ GPFSFSAL_setattrs(struct fsal_obj_handle *dir_hdl,
   /***********
    *  UTIME  *
    ***********/
-
 	/* Fill wanted atime. */
 	if (FSAL_TEST_MASK(obj_attr->mask, ATTR_ATIME)) {
 		attr_changed |= XATTR_ATIME;
@@ -347,12 +317,14 @@ GPFSFSAL_setattrs(struct fsal_obj_handle *dir_hdl,
 			 (unsigned long)myself->attributes.mtime.tv_sec,
 			 (unsigned long)buffxstat.buffstat.st_mtime);
 	}
+
 	/* Asking to set atime to NOW */
 	if (FSAL_TEST_MASK(obj_attr->mask, ATTR_ATIME_SERVER)) {
 		attr_changed |= XATTR_ATIME | XATTR_ATIME_NOW;
 		LogDebug(COMPONENT_FSAL, "current atime = %lu, new atime = NOW",
 			 (unsigned long)myself->attributes.atime.tv_sec);
 	}
+
 	/* Asking to set atime to NOW */
 	if (FSAL_TEST_MASK(obj_attr->mask, ATTR_MTIME_SERVER)) {
 		attr_changed |= XATTR_MTIME | XATTR_MTIME_NOW;
@@ -365,35 +337,27 @@ GPFSFSAL_setattrs(struct fsal_obj_handle *dir_hdl,
 		attr_valid |= XATTR_STAT;
 
 	if (use_acl && FSAL_TEST_MASK(obj_attr->mask, ATTR_ACL)) {
-		if (obj_attr->acl) {
-			attr_valid |= XATTR_ACL;
-			LogDebug(COMPONENT_FSAL, "setattr acl = %p",
-				 obj_attr->acl);
-
-			/* Convert FSAL ACL to GPFS NFS4 ACL and fill buffer. */
-			status =
-			    fsal_acl_2_gpfs_acl(dir_hdl,
-						obj_attr->acl,
-						&buffxstat);
-
-			if (FSAL_IS_ERROR(status))
-				return status;
-		} else {
+		if (obj_attr->acl == NULL) {
 			LogCrit(COMPONENT_FSAL, "setattr acl is NULL");
 			return fsalstat(ERR_FSAL_FAULT, 0);
 		}
-	}
 
-	/* If there is any change in stat or acl or both, send it down to fs. */
-	if (attr_valid != 0) {
-		status = fsal_set_xstat_by_handle(gpfs_fs->root_fd, ro_ctx,
-						  myself->handle, attr_valid,
-						  attr_changed, &buffxstat);
+		attr_valid |= XATTR_ACL;
+		LogDebug(COMPONENT_FSAL, "setattr acl = %p", obj_attr->acl);
+
+		/* Convert FSAL ACL to GPFS NFS4 ACL and fill buffer. */
+		status = fsal_acl_2_gpfs_acl(dir_hdl, obj_attr->acl,
+					     &buffxstat);
 
 		if (FSAL_IS_ERROR(status))
 			return status;
 	}
 
-	return fsalstat(ERR_FSAL_NO_ERROR, 0);
+	/* If there is any change in stat or acl or both, send it down to fs. */
+	if (attr_valid != 0)
+		return fsal_set_xstat_by_handle(gpfs_fs->root_fd, ro_ctx,
+						myself->handle, attr_valid,
+						attr_changed, &buffxstat);
 
+	return status;
 }
