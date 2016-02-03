@@ -27,6 +27,7 @@
  * -------------
  */
 
+#include "config.h"
 #include <assert.h>
 #include "fsal.h"
 #include "FSAL/access_check.h"
@@ -43,12 +44,12 @@ gpfs_open2(struct fsal_obj_handle *obj_hdl, fsal_openflags_t openflags,
 {
 	struct gpfs_fsal_obj_handle *myself =
 		container_of(obj_hdl, struct gpfs_fsal_obj_handle, obj_handle);
-	fsal_status_t status;
 	int fd = -1;
+	fsal_status_t status;
 
 	if (reopen) {
 		assert(myself->u.file.fd >= 0 &&
-		       myself->u.file.openflags != FSAL_O_CLOSED);
+			myself->u.file.openflags != FSAL_O_CLOSED);
 		fd = myself->u.file.fd;
 	} else {
 		assert(myself->u.file.fd == -1 &&
@@ -56,10 +57,11 @@ gpfs_open2(struct fsal_obj_handle *obj_hdl, fsal_openflags_t openflags,
 	}
 
 	status = GPFSFSAL_open(obj_hdl, op_ctx, openflags, &fd, NULL, reopen);
-	if (FSAL_IS_ERROR(status) == false) {
-		myself->u.file.fd = fd;
-		myself->u.file.openflags = openflags;
-	}
+	if (FSAL_IS_ERROR(status))
+		return status;
+
+	myself->u.file.fd = fd;
+	myself->u.file.openflags = openflags;
 
 	return status;
 }
@@ -135,7 +137,6 @@ gpfs_read(struct fsal_obj_handle *obj_hdl, uint64_t offset, size_t buffer_size,
 
 	status = GPFSFSAL_read(myself->u.file.fd, offset, buffer_size, buffer,
 			       read_amount, end_of_file);
-
 	if (FSAL_IS_ERROR(status))
 		return status;
 
@@ -204,8 +205,6 @@ gpfs_read_plus(struct fsal_obj_handle *obj_hdl, uint64_t offset,
 			*read_amount = buffer_size;
 			info->io_content.hole.di_length = buffer_size;
 		}
-		info->io_content.what = NFS4_CONTENT_HOLE;
-		info->io_content.hole.di_offset = offset;
 	} else {
 		info->io_content.what = NFS4_CONTENT_DATA;
 		info->io_content.data.d_offset = offset + nb_read;
@@ -216,7 +215,7 @@ gpfs_read_plus(struct fsal_obj_handle *obj_hdl, uint64_t offset,
 
 	if (nb_read != -1 &&
 	    (nb_read == 0 || nb_read < buffer_size ||
-		 (offset + nb_read) >= myself->attributes.filesize))
+		((offset + nb_read) >= myself->attributes.filesize)))
 		*end_of_file = true;
 	else
 		*end_of_file = false;
@@ -337,12 +336,13 @@ gpfs_write_plus(struct fsal_obj_handle *obj_hdl, uint64_t offset,
  *
  *  default case not supported
  */
-fsal_status_t gpfs_seek(struct fsal_obj_handle *obj_hdl, struct io_info *info)
+fsal_status_t
+gpfs_seek(struct fsal_obj_handle *obj_hdl, struct io_info *info)
 {
 	struct gpfs_fsal_obj_handle *myself =
 		container_of(obj_hdl, struct gpfs_fsal_obj_handle, obj_handle);
-	struct gpfs_io_info io_info = {0};
 	struct fseek_arg arg = {0};
+	struct gpfs_io_info io_info = {0};
 
 	assert(myself->u.file.fd >= 0 &&
 	       myself->u.file.openflags != FSAL_O_CLOSED);
@@ -467,7 +467,7 @@ gpfs_commit(struct fsal_obj_handle *obj_hdl, off_t offset, size_t len)
  *  throw an error if the fd is not open.  The old fsal didn't check this.
  */
 fsal_status_t
-gpfs_lock_op(struct fsal_obj_handle *obj_hdl, void *owner,
+gpfs_lock_op(struct fsal_obj_handle *obj_hdl, void *p_owner,
 	     fsal_lock_op_t lock_op, fsal_lock_param_t *request_lock,
 	     fsal_lock_param_t *conflicting_lock)
 {
@@ -490,11 +490,11 @@ gpfs_lock_op(struct fsal_obj_handle *obj_hdl, void *owner,
 
 	LogFullDebug(COMPONENT_FSAL,
 		     "Locking: op:%d type:%d claim:%d start:%" PRIu64
-		     " length:%lu ", lock_op, request_lock->lock_type,
+		     " length:%" PRIu64, lock_op, request_lock->lock_type,
 		     request_lock->lock_reclaim, request_lock->lock_start,
 		     request_lock->lock_length);
 
-	return GPFSFSAL_lock_op(op_ctx->fsal_export, obj_hdl, owner, lock_op,
+	return GPFSFSAL_lock_op(op_ctx->fsal_export, obj_hdl, p_owner, lock_op,
 				*request_lock, conflicting_lock);
 }
 
