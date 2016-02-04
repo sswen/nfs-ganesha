@@ -57,11 +57,11 @@ GPFSFSAL_lookup(const struct req_op_context *op_ctx,
 		struct attrlist *fsal_attr, struct gpfs_file_handle *fh,
 		struct fsal_filesystem **new_fs)
 {
-	fsal_status_t status;
-	int parent_fd;
 	struct gpfs_fsal_obj_handle *parent_hdl;
 	struct gpfs_filesystem *gpfs_fs;
-	struct fsal_fsid__ fsid;
+	struct fsal_fsid__ fsid = {0};
+	fsal_status_t status;
+	int parent_fd = -1;
 
 	if (!parent || !filename)
 		return fsalstat(ERR_FSAL_FAULT, 0);
@@ -73,10 +73,8 @@ GPFSFSAL_lookup(const struct req_op_context *op_ctx,
 	gpfs_fs = parent->fs->private;
 
 	status = fsal_internal_handle2fd_at(gpfs_fs->root_fd,
-					    parent_hdl->handle,
-					    &parent_fd,
-					    O_RDONLY,
-					    0);
+					    parent_hdl->handle, &parent_fd,
+					    O_RDONLY, 0);
 	if (FSAL_IS_ERROR(status))
 		return status;
 
@@ -85,13 +83,11 @@ GPFSFSAL_lookup(const struct req_op_context *op_ctx,
 	case DIRECTORY:
 		/* OK */
 		break;
-
 	case REGULAR_FILE:
 	case SYMBOLIC_LINK:
 		/* not a directory */
 		close(parent_fd);
 		return fsalstat(ERR_FSAL_NOTDIR, 0);
-
 	default:
 		close(parent_fd);
 		return fsalstat(ERR_FSAL_SERVERFAULT, 0);
@@ -116,8 +112,8 @@ GPFSFSAL_lookup(const struct req_op_context *op_ctx,
 		if (*new_fs == NULL) {
 			LogDebug(COMPONENT_FSAL,
 				 "Lookup of %s crosses filesystem boundary to unknown file system fsid=0x%016"
-				 PRIx64".0x%016"PRIx64,
-				 filename, fsid.major, fsid.minor);
+				 PRIx64".0x%016"PRIx64, filename, fsid.major,
+				 fsid.minor);
 			return fsalstat(ERR_FSAL_XDEV, EXDEV);
 		}
 
@@ -125,9 +121,8 @@ GPFSFSAL_lookup(const struct req_op_context *op_ctx,
 			LogDebug(COMPONENT_FSAL,
 				 "Lookup of %s crosses filesystem boundary to file system %s into FSAL %s",
 				 filename, (*new_fs)->path,
-				 (*new_fs)->fsal != NULL
-					? (*new_fs)->fsal->name
-					: "(none)");
+				 ((*new_fs)->fsal != NULL) ?
+					(*new_fs)->fsal->name : "(none)");
 			return fsalstat(ERR_FSAL_XDEV, EXDEV);
 		} else {
 			LogDebug(COMPONENT_FSAL,
@@ -140,10 +135,10 @@ GPFSFSAL_lookup(const struct req_op_context *op_ctx,
 	/* get object attributes */
 	if (fsal_attr) {
 		fsal_attr->mask =
-		    op_ctx->fsal_export->exp_ops.
-		    fs_supported_attrs(op_ctx->fsal_export);
-		status = GPFSFSAL_getattrs(op_ctx->fsal_export, gpfs_fs,
-					   op_ctx, fh, fsal_attr);
+		    op_ctx->fsal_export->exp_ops.fs_supported_attrs(
+							op_ctx->fsal_export);
+		status = GPFSFSAL_getattrs(op_ctx->fsal_export, gpfs_fs, op_ctx,
+					   fh, fsal_attr);
 		if (FSAL_IS_ERROR(status)) {
 			FSAL_CLEAR_MASK(fsal_attr->mask);
 			FSAL_SET_MASK(fsal_attr->mask, ATTR_RDATTR_ERR);
@@ -151,6 +146,5 @@ GPFSFSAL_lookup(const struct req_op_context *op_ctx,
 	}
 	close(parent_fd);
 
-	/* lookup complete ! */
 	return fsalstat(ERR_FSAL_NO_ERROR, 0);
 }
