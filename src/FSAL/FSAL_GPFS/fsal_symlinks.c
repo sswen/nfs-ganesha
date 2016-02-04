@@ -59,9 +59,9 @@ GPFSFSAL_readlink(struct fsal_obj_handle *dir_hdl,
 		  const struct req_op_context *op_ctx, char *link_content,
 		  size_t *link_len, struct attrlist *link_attr)
 {
-	fsal_status_t status;
 	struct gpfs_fsal_obj_handle *gpfs_hdl;
 	struct gpfs_filesystem *gpfs_fs;
+	fsal_status_t status;
 
 	/* note : link_attr is optional. */
 	if (!dir_hdl || !op_ctx || !link_content)
@@ -79,21 +79,17 @@ GPFSFSAL_readlink(struct fsal_obj_handle *dir_hdl,
 		return status;
 
 	/* retrieves object attributes, if asked */
-
 	if (link_attr) {
-
 		status = GPFSFSAL_getattrs(op_ctx->fsal_export, gpfs_fs,
-					   op_ctx, gpfs_hdl->handle,
-					   link_attr);
+					   op_ctx, gpfs_hdl->handle, link_attr);
 
 		/* On error, we set a flag in the returned attributes */
-
 		if (FSAL_IS_ERROR(status)) {
 			FSAL_CLEAR_MASK(link_attr->mask);
 			FSAL_SET_MASK(link_attr->mask, ATTR_RDATTR_ERR);
 		}
 	}
-	return fsalstat(ERR_FSAL_NO_ERROR, 0);
+	return status;
 }
 
 /**
@@ -124,15 +120,14 @@ GPFSFSAL_symlink(struct fsal_obj_handle *dir_hdl, const char *linkname,
 		 struct attrlist *link_attr)
 {
 
-	int rc, errsv;
-	fsal_status_t status;
-	int fd;
 	struct gpfs_fsal_obj_handle *gpfs_hdl;
 	struct gpfs_filesystem *gpfs_fs;
+	fsal_status_t status;
+	int fd = -1;
+	int errsv;
 
 	/* note : link_attr is optional. */
-	if (!dir_hdl || !op_ctx || !gpfs_fh || !linkname
-	    || !linkcontent)
+	if (!dir_hdl || !op_ctx || !gpfs_fh || !linkname || !linkcontent)
 		return fsalstat(ERR_FSAL_FAULT, 0);
 
 	gpfs_hdl =
@@ -141,10 +136,8 @@ GPFSFSAL_symlink(struct fsal_obj_handle *dir_hdl, const char *linkname,
 	gpfs_fs = dir_hdl->fs->private;
 
 	/* Tests if symlinking is allowed by configuration. */
-
-	if (!op_ctx->fsal_export->exp_ops.
-	    fs_supports(op_ctx->fsal_export,
-			fso_symlink_support))
+	if (!op_ctx->fsal_export->exp_ops.fs_supports(op_ctx->fsal_export,
+						      fso_symlink_support))
 		return fsalstat(ERR_FSAL_NOTSUPP, 0);
 
 	status = fsal_internal_handle2fd(gpfs_fs->root_fd, gpfs_hdl->handle,
@@ -153,43 +146,33 @@ GPFSFSAL_symlink(struct fsal_obj_handle *dir_hdl, const char *linkname,
 	if (FSAL_IS_ERROR(status))
 		return status;
 
-	/* build symlink path */
-
 	/* create the symlink on the filesystem using the credentials
 	 * for proper ownership assignment.
 	 */
-
 	fsal_set_credentials(op_ctx->creds);
-
-	rc = symlinkat(linkcontent, fd, linkname);
-	errsv = errno;
-
-	fsal_restore_ganesha_credentials();
-
-	if (rc) {
+	if (symlinkat(linkcontent, fd, linkname) != 0) {
+		errsv = errno;
+		fsal_restore_ganesha_credentials();
 		close(fd);
 		return fsalstat(posix2fsal_error(errsv), errsv);
 	}
 
+	fsal_restore_ganesha_credentials();
+
 	/* now get the associated handle, while there is a race, there is
 	   also a race lower down  */
 	status = fsal_internal_get_handle_at(fd, linkname, gpfs_fh);
-
 	if (FSAL_IS_ERROR(status)) {
 		close(fd);
 		return status;
 	}
 
 	/* get attributes if asked */
-
 	if (link_attr) {
-
-		status = GPFSFSAL_getattrs(op_ctx->fsal_export, gpfs_fs,
-					   op_ctx, gpfs_fh,
-					   link_attr);
+		status = GPFSFSAL_getattrs(op_ctx->fsal_export, gpfs_fs, op_ctx,
+					   gpfs_fh, link_attr);
 
 		/* On error, we set a flag in the returned attributes */
-
 		if (FSAL_IS_ERROR(status)) {
 			FSAL_CLEAR_MASK(link_attr->mask);
 			FSAL_SET_MASK(link_attr->mask, ATTR_RDATTR_ERR);
@@ -200,5 +183,5 @@ GPFSFSAL_symlink(struct fsal_obj_handle *dir_hdl, const char *linkname,
 	}
 
 	close(fd);
-	return fsalstat(ERR_FSAL_NO_ERROR, 0);
+	return status;
 }
