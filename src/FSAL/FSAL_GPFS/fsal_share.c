@@ -40,9 +40,9 @@
 fsal_status_t
 GPFSFSAL_share_op(int mntfd, int fd, void *owner, fsal_share_param_t req_share)
 {
-	int rc = 0;
-	struct share_reserve_arg share_arg;
-	int errsv = 0;
+	struct share_reserve_arg share_arg = {0};
+	int errsv;
+	int rc;
 
 	LogFullDebug(COMPONENT_FSAL,
 		     "Share reservation: access:%u deny:%u owner:%p",
@@ -55,16 +55,15 @@ GPFSFSAL_share_op(int mntfd, int fd, void *owner, fsal_share_param_t req_share)
 	share_arg.share_deny = req_share.share_deny;
 
 	rc = gpfs_ganesha(OPENHANDLE_SHARE_RESERVE, &share_arg);
+	if (rc >= 0)
+		return fsalstat(ERR_FSAL_NO_ERROR, 0);
+
 	errsv = errno;
+	LogDebug(COMPONENT_FSAL,
+		 "gpfs_ganesha: OPENHANDLE_SHARE_RESERVE returned error, rc=%d, errno=%d",
+		 rc, errsv);
+	if (errsv == EUNATCH)
+		LogFatal(COMPONENT_FSAL, "GPFS Returned EUNATCH");
 
-	if (rc < 0) {
-		LogDebug(COMPONENT_FSAL,
-			 "gpfs_ganesha: OPENHANDLE_SHARE_RESERVE returned error, rc=%d, errno=%d",
-			 rc, errsv);
-		if (errsv == EUNATCH)
-			LogFatal(COMPONENT_FSAL, "GPFS Returned EUNATCH");
-		return fsalstat(posix2fsal_error(errsv), errsv);
-	}
-
-	return fsalstat(ERR_FSAL_NO_ERROR, 0);
+	return fsalstat(posix2fsal_error(errsv), errsv);
 }
