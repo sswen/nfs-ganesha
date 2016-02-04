@@ -34,7 +34,6 @@
  */
 
 #include "config.h"
-
 #include <fcntl.h>
 #include "fsal_api.h"
 #include "FSAL/fsal_commonlib.h"
@@ -44,11 +43,6 @@
 #include "gpfs_methods.h"
 #include "pnfs_utils.h"
 #include "nfs_creds.h"
-
-#define min(a, b)			\
-	({ typeof(a) _a = (a);		\
-	typeof(b) _b = (b);		\
-	_a < _b ? _a : _b; })
 
 /**
  * @brief Release a DS handle
@@ -84,24 +78,17 @@ static void ds_release(struct fsal_ds_handle *const ds_pub)
  *
  * @return An NFSv4.1 status code.
  */
-static nfsstat4 ds_read(struct fsal_ds_handle *const ds_pub,
-			struct req_op_context *const req_ctx,
-			const stateid4 *stateid, const offset4 offset,
-			const count4 requested_length, void *const buffer,
-			count4 * const supplied_length,
-			bool * const end_of_file)
+static nfsstat4
+ds_read(struct fsal_ds_handle *const ds_pub,
+	struct req_op_context *const req_ctx, const stateid4 *stateid,
+	const offset4 offset, const count4 requested_length, void *const buffer,
+	count4 * const supplied_length, bool * const end_of_file)
 {
-	/* The private 'full' DS handle */
 	struct gpfs_ds *ds = container_of(ds_pub, struct gpfs_ds, ds);
 	struct gpfs_file_handle *gpfs_handle = &ds->wire;
-	/* The amount actually read */
-	int amount_read = 0;
-	struct dsread_arg rarg;
-	unsigned int *fh;
-	int errsv = 0;
-
-
-	fh = (int *)&(gpfs_handle->f_handle);
+	struct dsread_arg rarg = {0};
+	unsigned int *fh = (int *)&(gpfs_handle->f_handle);
+	int amount_read;
 
 	rarg.mountdirfd = ds->gpfs_fs->root_fd;
 	rarg.handle = gpfs_handle;
@@ -117,11 +104,10 @@ static nfsstat4 ds_read(struct fsal_ds_handle *const ds_pub,
 		 fh[4], fh[5], fh[6], fh[7], fh[8], fh[9]);
 
 	amount_read = gpfs_ganesha(OPENHANDLE_DS_READ, &rarg);
-	errsv = errno;
 	if (amount_read < 0) {
-		if (errsv == EUNATCH)
+		if (errno == EUNATCH)
 			LogFatal(COMPONENT_PNFS, "GPFS Returned EUNATCH");
-		return posix2nfs4_error(errsv);
+		return posix2nfs4_error(errno);
 	}
 
 	*supplied_length = amount_read;
@@ -153,25 +139,19 @@ static nfsstat4 ds_read(struct fsal_ds_handle *const ds_pub,
  *
  * @return An NFSv4.2 status code.
  */
-static nfsstat4 ds_read_plus(struct fsal_ds_handle *const ds_pub,
-			struct req_op_context *const req_ctx,
-			const stateid4 *stateid, const offset4 offset,
-			const count4 requested_length, void *const buffer,
-			const count4 supplied_length,
-			bool * const end_of_file,
-			struct io_info *info)
+static nfsstat4
+ds_read_plus(struct fsal_ds_handle *const ds_pub,
+	     struct req_op_context *const req_ctx, const stateid4 *stateid,
+	     const offset4 offset, const count4 requested_length,
+	     void *const buffer, const count4 supplied_length,
+	     bool * const end_of_file, struct io_info *info)
 {
-	/* The private 'full' DS handle */
 	struct gpfs_ds *ds = container_of(ds_pub, struct gpfs_ds, ds);
 	struct gpfs_file_handle *gpfs_handle = &ds->wire;
-	/* The amount actually read */
-	int amount_read = 0;
-	struct dsread_arg rarg;
-	unsigned int *fh;
-	uint64_t filesize;
-	int errsv = 0;
-
-	fh = (int *)&(gpfs_handle->f_handle);
+	struct dsread_arg rarg = {0};
+	unsigned int *fh = (int *)&(gpfs_handle->f_handle);
+	uint64_t filesize = 0;
+	int amount_read;
 
 	rarg.mountdirfd = ds->gpfs_fs->root_fd;
 	rarg.handle = gpfs_handle;
@@ -188,35 +168,37 @@ static nfsstat4 ds_read_plus(struct fsal_ds_handle *const ds_pub,
 		 fh[4], fh[5], fh[6], fh[7], fh[8], fh[9]);
 
 	amount_read = gpfs_ganesha(OPENHANDLE_DS_READ, &rarg);
-	errsv = errno;
-	if (amount_read < 0) {
-		if (errsv == EUNATCH)
-			LogFatal(COMPONENT_PNFS, "GPFS Returned EUNATCH");
-		if (errsv != ENODATA)
-			return posix2nfs4_error(errsv);
-
-		/* errsv == ENODATA */
-		info->io_content.what = NFS4_CONTENT_HOLE;
-		info->io_content.hole.di_offset = offset;     /*offset of hole*/
-		info->io_content.hole.di_length = requested_length;/*hole len*/
-
-		if ((requested_length + offset) > filesize) {
-			amount_read = filesize - offset;
-			if (amount_read < 0) {
-				amount_read = 0;
-				*end_of_file = true;
-			} else if (amount_read < requested_length)
-				*end_of_file = true;
-			info->io_content.hole.di_length = amount_read;
-		}
-	} else {
+	if (amount_read >= 0) {
 		info->io_content.what = NFS4_CONTENT_DATA;
 		info->io_content.data.d_offset = offset + amount_read;
 		info->io_content.data.d_data.data_len = amount_read;
 		info->io_content.data.d_data.data_val = buffer;
 		if (amount_read == 0 || amount_read < requested_length)
 			*end_of_file = true;
+
+		return NFS4_OK;
 	}
+
+	if (errno == EUNATCH)
+		LogFatal(COMPONENT_PNFS, "GPFS Returned EUNATCH");
+
+	if (errno != ENODATA)
+		return posix2nfs4_error(errno);
+
+	/* errno == ENODATA */
+	info->io_content.what = NFS4_CONTENT_HOLE;
+	info->io_content.hole.di_offset = offset;     /*offset of hole*/
+
+	if ((requested_length + offset) > filesize) {
+		amount_read = filesize - offset;
+		if (amount_read < 0) {
+			amount_read = 0;
+			*end_of_file = true;
+		} else if (amount_read < requested_length)
+			*end_of_file = true;
+		info->io_content.hole.di_length = amount_read;
+	} else
+		info->io_content.hole.di_length = requested_length; /*hole len*/
 
 	return NFS4_OK;
 }
@@ -244,26 +226,19 @@ static nfsstat4 ds_read_plus(struct fsal_ds_handle *const ds_pub,
  *
  * @return An NFSv4.1 status code.
  */
-static nfsstat4 ds_write(struct fsal_ds_handle *const ds_pub,
-			 struct req_op_context *const req_ctx,
-			 const stateid4 *stateid, const offset4 offset,
-			 const count4 write_length, const void *buffer,
-			 const stable_how4 stability_wanted,
-			 count4 * const written_length,
-			 verifier4 * const writeverf,
-			 stable_how4 * const stability_got)
+static nfsstat4
+ds_write(struct fsal_ds_handle *const ds_pub,
+	 struct req_op_context *const req_ctx, const stateid4 *stateid,
+	 const offset4 offset, const count4 write_length, const void *buffer,
+	 const stable_how4 stability_wanted, count4 * const written_length,
+	 verifier4 * const writeverf, stable_how4 * const stability_got)
 {
-	/* The private 'full' DS handle */
 	struct gpfs_ds *ds = container_of(ds_pub, struct gpfs_ds, ds);
 	struct gpfs_file_handle *gpfs_handle = &ds->wire;
-	/* The amount actually read */
-	int32_t amount_written = 0;
-	struct dswrite_arg warg;
-	unsigned int *fh;
-	struct gsh_buffdesc key;
-	int errsv = 0;
-
-	fh = (int *)&(gpfs_handle->f_handle);
+	unsigned int *fh = (int *)&(gpfs_handle->f_handle);
+	struct dswrite_arg warg = {0};
+	struct gsh_buffdesc key = {0};
+	int32_t amount_written;
 
 	memset(writeverf, 0, NFS4_VERIFIER_SIZE);
 
@@ -274,7 +249,7 @@ static nfsstat4 ds_write(struct fsal_ds_handle *const ds_pub,
 	warg.length = write_length;
 	warg.stability_wanted = stability_wanted;
 	warg.stability_got = stability_got;
-	warg.verifier4 = (int32_t *) writeverf;
+	warg.verifier4 = (uint32_t *) writeverf;
 	warg.options = 0;
 
 	LogDebug(COMPONENT_PNFS,
@@ -284,11 +259,10 @@ static nfsstat4 ds_write(struct fsal_ds_handle *const ds_pub,
 		 fh[4], fh[5], fh[6], fh[7], fh[8], fh[9]);
 
 	amount_written = gpfs_ganesha(OPENHANDLE_DS_WRITE, &warg);
-	errsv = errno;
 	if (amount_written < 0) {
-		if (errsv == EUNATCH)
+		if (errno == EUNATCH)
 			LogFatal(COMPONENT_PNFS, "GPFS Returned EUNATCH");
-		return posix2nfs4_error(errsv);
+		return posix2nfs4_error(errno);
 	}
 
 	LogDebug(COMPONENT_PNFS, "write verifier %d-%d\n", warg.verifier4[0],
@@ -332,27 +306,20 @@ static nfsstat4 ds_write(struct fsal_ds_handle *const ds_pub,
  *
  * @return An NFSv4.2 status code.
  */
-static nfsstat4 ds_write_plus(struct fsal_ds_handle *const ds_pub,
-			 struct req_op_context *const req_ctx,
-			 const stateid4 *stateid, const offset4 offset,
-			 const count4 write_length, const void *buffer,
-			 const stable_how4 stability_wanted,
-			 count4 * const written_length,
-			 verifier4 * const writeverf,
-			 stable_how4 * const stability_got,
-			 struct io_info *info)
+static nfsstat4
+ds_write_plus(struct fsal_ds_handle *const ds_pub,
+	      struct req_op_context *const req_ctx, const stateid4 *stateid,
+	      const offset4 offset, const count4 write_length,
+	      const void *buffer, const stable_how4 stability_wanted,
+	      count4 * const written_length, verifier4 * const writeverf,
+	      stable_how4 * const stability_got, struct io_info *info)
 {
-	/* The private 'full' DS handle */
 	struct gpfs_ds *ds = container_of(ds_pub, struct gpfs_ds, ds);
 	struct gpfs_file_handle *gpfs_handle = &ds->wire;
-	/* The amount actually read */
-	int32_t amount_written = 0;
-	struct dswrite_arg warg;
-	unsigned int *fh;
-	struct gsh_buffdesc key;
-	int errsv = 0;
-
-	fh = (int *)&(gpfs_handle->f_handle);
+	unsigned int *fh = (int *)&(gpfs_handle->f_handle);
+	struct dswrite_arg warg = {0};
+	struct gsh_buffdesc key = {0};
+	int32_t amount_written;
 
 	memset(writeverf, 0, NFS4_VERIFIER_SIZE);
 
@@ -363,7 +330,7 @@ static nfsstat4 ds_write_plus(struct fsal_ds_handle *const ds_pub,
 	warg.length = write_length;
 	warg.stability_wanted = stability_wanted;
 	warg.stability_got = stability_got;
-	warg.verifier4 = (int32_t *) writeverf;
+	warg.verifier4 = (uint32_t *) writeverf;
 	warg.options = 0;
 
 	if (info->io_content.what == NFS4_CONTENT_HOLE)
@@ -376,15 +343,14 @@ static nfsstat4 ds_write_plus(struct fsal_ds_handle *const ds_pub,
 		 fh[4], fh[5], fh[6], fh[7], fh[8], fh[9]);
 
 	amount_written = gpfs_ganesha(OPENHANDLE_DS_WRITE, &warg);
-	errsv = errno;
 	if (amount_written < 0) {
-		if (errsv == EUNATCH)
+		if (errno == EUNATCH)
 			LogFatal(COMPONENT_PNFS, "GPFS Returned EUNATCH");
-		return posix2nfs4_error(errsv);
+		return posix2nfs4_error(errno);
 	}
 
-	LogDebug(COMPONENT_PNFS, "write verifier %d-%d\n",
-				warg.verifier4[0], warg.verifier4[1]);
+	LogDebug(COMPONENT_PNFS, "write verifier %d-%d\n", warg.verifier4[0],
+		 warg.verifier4[1]);
 
 	key.addr = gpfs_handle;
 	key.len = gpfs_handle->handle_key_size;
@@ -416,10 +382,10 @@ static nfsstat4 ds_write_plus(struct fsal_ds_handle *const ds_pub,
  *
  * @return An NFSv4.1 status code.
  */
-static nfsstat4 ds_commit(struct fsal_ds_handle *const ds_pub,
-			  struct req_op_context *const req_ctx,
-			  const offset4 offset, const count4 count,
-			  verifier4 * const writeverf)
+static nfsstat4
+ds_commit(struct fsal_ds_handle *const ds_pub,
+	  struct req_op_context *const req_ctx, const offset4 offset,
+	  const count4 count, verifier4 * const writeverf)
 {
 	memset(writeverf, 0, NFS4_VERIFIER_SIZE);
 
@@ -456,10 +422,10 @@ static void dsh_ops_init(struct fsal_dsh_ops *ops)
  * @return NFSv4.1 error codes.
  */
 
-static nfsstat4 make_ds_handle(struct fsal_pnfs_ds *const pds,
-			       const struct gsh_buffdesc *const desc,
-			       struct fsal_ds_handle **const handle,
-			       int flags)
+static nfsstat4
+make_ds_handle(struct fsal_pnfs_ds *const pds,
+	       const struct gsh_buffdesc *const desc,
+	       struct fsal_ds_handle **const handle, int flags)
 {
 	struct gpfs_file_handle *fh = (struct gpfs_file_handle *)desc->addr;
 	struct gpfs_ds *ds;		/* Handle to be created */
@@ -497,16 +463,14 @@ static nfsstat4 make_ds_handle(struct fsal_pnfs_ds *const pds,
 	if (fs == NULL) {
 		LogInfo(COMPONENT_FSAL,
 			"Could not find filesystem for fsid=0x%016"PRIx64
-			".0x%016"PRIx64" from handle",
-			fsid.major, fsid.minor);
+			".0x%016"PRIx64" from handle", fsid.major, fsid.minor);
 		return NFS4ERR_STALE;
 	}
 
 	if (fs->fsal != pds->fsal) {
 		LogInfo(COMPONENT_FSAL,
 			"Non GPFS filesystem fsid=0x%016"PRIx64".0x%016"PRIx64
-			" from handle",
-			fsid.major, fsid.minor);
+			" from handle", fsid.major, fsid.minor);
 		return NFS4ERR_STALE;
 	}
 
@@ -515,14 +479,13 @@ static nfsstat4 make_ds_handle(struct fsal_pnfs_ds *const pds,
 	*handle = &ds->ds;
 	fsal_ds_handle_init(*handle, pds);
 
-	/* Connect lazily when a FILE_SYNC4 write forces us to, not
-	   here. */
+	/* Connect lazily when a FILE_SYNC4 write forces us to, not here. */
 
 	ds->connected = false;
-
 	ds->gpfs_fs = fs->private;
 
 	memcpy(&ds->wire, desc->addr, desc->len);
+
 	return NFS4_OK;
 }
 
