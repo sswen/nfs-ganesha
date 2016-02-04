@@ -49,11 +49,10 @@ fsal_status_t
 GPFSFSAL_unlink(struct fsal_obj_handle *dir_hdl, const char *object_name,
 		const struct req_op_context *op_ctx)
 {
-
-	fsal_status_t status;
-	gpfsfsal_xstat_t buffxstat;
 	struct gpfs_fsal_obj_handle *gpfs_hdl;
 	struct gpfs_filesystem *gpfs_fs;
+	gpfsfsal_xstat_t buffxstat = {0};
+	fsal_status_t status;
 
 	if (!dir_hdl || !op_ctx || !object_name)
 		return fsalstat(ERR_FSAL_FAULT, 0);
@@ -72,14 +71,9 @@ GPFSFSAL_unlink(struct fsal_obj_handle *dir_hdl, const char *object_name,
    * DELETE FROM THE FILESYSTEM *
    ******************************/
 	fsal_set_credentials(op_ctx->creds);
-
 	status = fsal_internal_unlink(gpfs_fs->root_fd, gpfs_hdl->handle,
 				      object_name, &buffxstat.buffstat);
-
 	fsal_restore_ganesha_credentials();
 
-	if (FSAL_IS_ERROR(status))
-		return status;
-
-	return fsalstat(ERR_FSAL_NO_ERROR, 0);
+	return status;
 }
