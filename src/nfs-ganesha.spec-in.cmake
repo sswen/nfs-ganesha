@@ -16,6 +16,8 @@
 BuildRequires: sles-release >= 12
 Requires: sles-release >= 12
 
+%define dist .sles12
+
 %global with_systemd 1
 %global with_nfsidmap 1
 %endif
